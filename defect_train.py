@@ -15,6 +15,7 @@ from ESDI_dataloader import get_loader
 import cv2
 import torch.nn.functional as F
 import time
+from tqdm import tqdm
 
 def setup_logger(name, save_dir, filename="log.txt", mode='w'):
     logger = logging.getLogger(name)
@@ -138,10 +139,13 @@ def train(fold, model_name, dataset_name):
     best_sm = 0
 
     for epoch in range(0, epoch_num):
-        print(f"Epoch: {epoch}")
+        print(f"\nEpoch: {epoch}/{epoch_num-1}")
         start_time = time.time()
+        running_loss = 0.0
 
-        for i, data in enumerate(train_loader1):
+        # 【加入 tqdm 进度条】
+        pbar = tqdm(train_loader1, desc=f"Fold {fold} Training")
+        for i, data in enumerate(pbar):
             inputs, labels = data['image'], data['label']
             inputs = inputs.type(torch.FloatTensor)
             labels = labels.type(torch.FloatTensor)
@@ -152,17 +156,22 @@ def train(fold, model_name, dataset_name):
             predictions_mask = net(images)
 
             mask_losses = 0
-            for i in range(len(predictions_mask)):
-                mask_losses = mask_losses + total_loss(predictions_mask[i], gts)
+            for j in range(len(predictions_mask)):
+                mask_losses = mask_losses + total_loss(predictions_mask[j], gts)
 
             losses = mask_losses
             losses.backward()
             optimizer.step()
 
             running_loss += losses.item()
+            
+            # 【实时在进度条尾部显示当前批次的 Loss】
+            pbar.set_postfix({'Loss': f"{losses.item():.4f}"})
 
         end_time = time.time()
-        print('Cost time: {:.4f}'.format(end_time - start_time))
+        # 【打印当前 epoch 的平均 Loss】
+        avg_loss = running_loss / len(train_loader1)
+        print('Cost time: {:.4f}s | Avg Loss: {:.4f}'.format(end_time - start_time, avg_loss))
 
         lr_scheduler.step()
 
