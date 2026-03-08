@@ -264,10 +264,10 @@ class WPFormer(nn.Module):
         super(WPFormer, self).__init__()
         if method=="pvt_v2_b2":
             self.backbone = pvt_v2_b2()  # [64, 128, 320, 512]
-            path = 'D:\yanfeng\Paper Code\CVPR2025\WPFormer\model\pvt_v2_b2.pth'
+            path = './model/pvt_v2_b2.pth'
         else:
             self.backbone = pvt_v2_b4()  # [64, 128, 320, 512]
-            path = 'D:\yanfeng\Paper Code\CVPR2025\WPFormer\model\pvt_v2_b4.pth'
+            path = './model/pvt_v2_b4.pth'
             
         save_model = torch.load(path)
         model_dict = self.backbone.state_dict()

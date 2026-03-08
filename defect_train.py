@@ -125,26 +125,33 @@ import time
 def train(model_name, dataset_name):
 
 
-    if dataset_name == "CrackSeg9k":
-        epoch_num = 60
-        epoch_val = 50
+    # if dataset_name == "CrackSeg9k":
+    #     epoch_num = 60
+    #     epoch_val = 50
 
-    elif dataset_name == "ZJU-Leaper":
-        epoch_num = 24
-        epoch_val = 20
-    elif dataset_name == "ESDIs-SOD":
-        epoch_num = 150
-        epoch_val = 100
+    # elif dataset_name == "ZJU-Leaper":
+    #     epoch_num = 24
+    #     epoch_val = 20
+    # elif dataset_name == "ESDIs-SOD":
+    #     epoch_num = 150
+    #     epoch_val = 100
+    
+    dataset_name = "s2ds" # 强制指定你的数据集名
+    epoch_num = 60
+    epoch_val = 10 # 因为数据少，提前到第10个epoch开始验证保存模型
 
     net = WPFormer(method="pvt_v2_b2", channel=64)
     train_size = 384
 
-    file_dir= ".\datasets\\"
+    file_dir = "/home/skye/data/Skye/databases/"
 
-    train_image_root = os.path.join(file_dir, dataset_name + "\\train\images\\")
-    train_gt_root = os.path.join(file_dir, dataset_name + "\\train\gt\\")
-    test_image_root = os.path.join(file_dir, dataset_name + "\\test\images\\")
-    test_gt_root = os.path.join(file_dir, dataset_name + "\\test\gt\\")
+    # 改为 Linux 友好的 / 分隔符，并将 gt 改为 labs 适配你的脚本
+    train_image_root = os.path.join(file_dir, dataset_name, "train", "images", "")
+    train_gt_root = os.path.join(file_dir, dataset_name, "train", "labs", "")
+    
+    # 训练时的验证集，指向你划分出的 35 张 val 图像
+    test_image_root = os.path.join(file_dir, dataset_name, "val", "images", "")
+    test_gt_root = os.path.join(file_dir, dataset_name, "val", "labs", "")
 
     train_loader1 = get_loader(train_image_root, train_gt_root, batchsize=8, trainsize=train_size, is_train=True)
 
