@@ -107,20 +107,44 @@ def eval_psnr(test_image_root, test_gt_root, train_size,model):
 
     return mae,wfm
 
+# def total_loss(pred, mask):
+#     pred = torch.sigmoid(pred)
+#     bce_loss = nn.BCELoss()
+#     bce = bce_loss(pred, mask)
+
+#     inter = (pred * mask).sum(dim=(2, 3))
+#     union = (pred + mask).sum(dim=(2, 3))
+#     iou = 1 - inter/(union-inter)
+#     iou = iou.mean()
+
+#     #mse_loss = nn.MSELoss(reduction="mean")
+#     #mse = mse_loss(pred, mask)
+
+#     return iou+bce
+import torch.nn.functional as F
+
 def total_loss(pred, mask):
     pred = torch.sigmoid(pred)
-    bce_loss = nn.BCELoss()
-    bce = bce_loss(pred, mask)
+    
+    # 1. 生成有效像素掩码：值为 255 的区域设为 0（不参与计算），其余设为 1
+    valid_mask = (mask != 255).float()
+    
+    # 2. 将标签中的 255 暂时替换为 0，防止底层运算越界报错
+    # 真正的屏蔽作用由外层的 valid_mask 乘法完成
+    clean_mask = torch.where(mask == 255, torch.zeros_like(mask), mask)
+    
+    # 3. 计算带掩码的 BCE Loss
+    bce = F.binary_cross_entropy(pred, clean_mask, reduction='none')
+    bce = (bce * valid_mask).sum() / (valid_mask.sum() + 1e-8)
 
-    inter = (pred * mask).sum(dim=(2, 3))
-    union = (pred + mask).sum(dim=(2, 3))
-    iou = 1 - inter/(union-inter)
+    # 4. 计算带掩码的 IoU Loss
+    inter = (pred * clean_mask * valid_mask).sum(dim=(2, 3))
+    union = ((pred + clean_mask) * valid_mask).sum(dim=(2, 3))
+    iou = 1 - inter / (union - inter + 1e-8)
     iou = iou.mean()
 
-    #mse_loss = nn.MSELoss(reduction="mean")
-    #mse = mse_loss(pred, mask)
+    return iou + bce
 
-    return iou+bce
 import time
 def train(model_name, dataset_name):
 

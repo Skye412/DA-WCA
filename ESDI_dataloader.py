@@ -100,30 +100,97 @@ class ImageFolder(Dataset):
             transforms.ToTensor()])
 
 
+    # def __getitem__(self, index):
+    #     image = self.rgb_loader(self.images[index])
+    #     gt = self.binary_loader(self.gts[index])
+    #     image_size = image.size
+    #     # data augumentation
+    #     #image, gt = self.joint_transform(image,gt)
+
+    #     image, gt = self.aug_transform(image=np.asarray(image), mask=np.asarray(gt)).values()
+
+    #     gt = np.asarray(gt)
+    #     edge = cv2.Canny(gt, 100, 200)
+    #     kernel = np.ones((5, 5), np.uint8)
+    #     edge = cv2.dilate(edge, kernel, iterations=1)
+    #     # opencv-->PIL
+    #     # image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+    #     image = Image.fromarray(image)
+    #     gt = Image.fromarray(gt)
+    #     edge = Image.fromarray(edge)
+
+    #     image = self.img_transform(image)
+    #     gt = self.gt_transform(gt)
+    #     edge = self.edge_transform(edge)
+
+    #     return {'image': image, 'label': gt,"edge":edge}
+    
+    # def __getitem__(self, index):
+    #     image = self.rgb_loader(self.images[index])
+    #     gt = self.binary_loader(self.gts[index])
+
+    #     # 1. 数据增强
+    #     image, gt = self.aug_transform(image=np.asarray(image), mask=np.asarray(gt)).values()
+
+    #     # 2. S2DS 标签硬核映射
+    #     gt_np = np.asarray(gt, dtype=np.float32)
+    #     target = np.zeros_like(gt_np)
+        
+    #     # 【客观条件确认】：这里假设 S2DS 中“裂缝”的像素值为 1，其他病害为 2, 3, 4...
+    #     # 若你的 S2DS 掩码像素定义不同（例如裂缝本身是 255），请务必修改这里的逻辑。
+    #     target[gt_np == 1] = 1.0    # 正样本 (裂缝)：模型需要学习的目标
+    #     target[gt_np > 1] = 255.0   # 忽略样本 (其他病害)：不产生梯度
+        
+    #     # 3. 手动 Resize 并转为 Tensor (避开 ToTensor() 自动除以 255 的机制)
+    #     # 使用 INTER_NEAREST 防止插值产生 0~1 之间的小数或破坏 255 的整型属性
+    #     target = cv2.resize(target, (self.trainsize, self.trainsize), interpolation=cv2.INTER_NEAREST)
+    #     gt_tensor = torch.from_numpy(target).unsqueeze(0) # [1, H, W]
+
+    #     # 4. 边缘计算 (训练中暂未直接作为 Loss，但保持数据结构不出错)
+    #     edge = cv2.Canny(np.uint8(gt_np), 100, 200)
+    #     kernel = np.ones((5, 5), np.uint8)
+    #     edge = cv2.dilate(edge, kernel, iterations=1)
+    #     edge = cv2.resize(edge, (self.trainsize, self.trainsize), interpolation=cv2.INTER_NEAREST)
+    #     edge_tensor = torch.from_numpy(edge).unsqueeze(0).float() / 255.0
+
+    #     # 5. 原图处理保持不变
+    #     image = Image.fromarray(image)
+    #     image = self.img_transform(image)
+
+    #     return {'image': image, 'label': gt_tensor, "edge": edge_tensor}
     def __getitem__(self, index):
         image = self.rgb_loader(self.images[index])
         gt = self.binary_loader(self.gts[index])
-        image_size = image.size
-        # data augumentation
-        #image, gt = self.joint_transform(image,gt)
 
+        # 1. 数据增强
         image, gt = self.aug_transform(image=np.asarray(image), mask=np.asarray(gt)).values()
 
-        gt = np.asarray(gt)
-        edge = cv2.Canny(gt, 100, 200)
+        # 2. S2DS 标签硬核映射
+        gt_np = np.asarray(gt, dtype=np.float32)
+        target = np.zeros_like(gt_np)
+        
+        # 【客观条件确认】：这里假设 S2DS 中“裂缝”的像素值为 1，其他病害为 2, 3, 4...
+        # 若你的 S2DS 掩码像素定义不同（例如裂缝本身是 255），请务必修改这里的逻辑。
+        target[gt_np == 1] = 1.0    # 正样本 (裂缝)：模型需要学习的目标
+        target[gt_np > 1] = 255.0   # 忽略样本 (其他病害)：不产生梯度
+        
+        # 3. 手动 Resize 并转为 Tensor (避开 ToTensor() 自动除以 255 的机制)
+        # 使用 INTER_NEAREST 防止插值产生 0~1 之间的小数或破坏 255 的整型属性
+        target = cv2.resize(target, (self.trainsize, self.trainsize), interpolation=cv2.INTER_NEAREST)
+        gt_tensor = torch.from_numpy(target).unsqueeze(0) # [1, H, W]
+
+        # 4. 边缘计算 (训练中暂未直接作为 Loss，但保持数据结构不出错)
+        edge = cv2.Canny(np.uint8(gt_np), 100, 200)
         kernel = np.ones((5, 5), np.uint8)
         edge = cv2.dilate(edge, kernel, iterations=1)
-        # opencv-->PIL
-        # image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+        edge = cv2.resize(edge, (self.trainsize, self.trainsize), interpolation=cv2.INTER_NEAREST)
+        edge_tensor = torch.from_numpy(edge).unsqueeze(0).float() / 255.0
+
+        # 5. 原图处理保持不变
         image = Image.fromarray(image)
-        gt = Image.fromarray(gt)
-        edge = Image.fromarray(edge)
-
         image = self.img_transform(image)
-        gt = self.gt_transform(gt)
-        edge = self.edge_transform(edge)
 
-        return {'image': image, 'label': gt,"edge":edge}
+        return {'image': image, 'label': gt_tensor, "edge": edge_tensor}
 
 
     def rgb_loader(self, path):
