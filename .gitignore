@@ -1,0 +1,45 @@
+# dataset
+data/
+datasets/
+databases/
+*.zip
+*.rar
+*.7z
+*.tar
+*.gz
+
+# images / labels if stored locally
+*.bmp
+*.tif
+*.tiff
+
+# training outputs
+runs/
+logs/
+checkpoints/
+weights/
+snapshots/
+results/
+output/
+outputs/
+save_model/
+
+# model files
+*.pth
+*.pt
+*.ckpt
+*.onnx
+
+# cache
+__pycache__/
+*.pyc
+.cache/
+.ipynb_checkpoints/
+
+# system files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/*.pth
