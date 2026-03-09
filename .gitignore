@@ -22,6 +22,7 @@ snapshots/
 results/
 output/
 outputs/
+save/
 save_model/
 
 # model files

@@ -13,7 +13,6 @@ class ImageFolder(data.Dataset):
         self.training = is_train
         self.trainsize = trainsize
 
-        # 通过 TXT 列表读取文件名
         with open(list_path, 'r') as f:
             filenames = [line.strip() for line in f.readlines() if line.strip()]
 
@@ -36,20 +35,20 @@ class ImageFolder(data.Dataset):
         # 1. 数据增强
         image, gt = self.aug_transform(image=np.asarray(image), mask=np.asarray(gt)).values()
 
-        # 2. S2DS 真实像素值硬核映射
+        # 2. 标签映射修正 (根据 check_pixels.py 的结果)
         gt_np = np.asarray(gt, dtype=np.float32)
         target = np.zeros_like(gt_np)
         
-        # 将明确的裂缝区域(255)映射为正样本(1.0)
+        # 【客观修正】：裂缝像素是 255，将其映射为 1.0
         target[gt_np == 255] = 1.0    
-        # 将中间值（如149, 225等）映射为忽略标签(255.0)，Loss计算时会屏蔽
+        # 其他病害（中间值如 149, 225）映射为 255.0，作为忽略区域
         target[(gt_np > 0) & (gt_np < 255)] = 255.0   
         
-        # 3. 手动 Resize 并转为 Tensor (使用 INTER_NEAREST 保护 255 不被插值破坏)
+        # 3. Resize 并转为 Tensor
         target = cv2.resize(target, self.trainsize_tuple, interpolation=cv2.INTER_NEAREST)
         gt_tensor = torch.from_numpy(target).unsqueeze(0) 
 
-        # 4. 边缘计算 (仅基于明确裂缝)
+        # 4. 边缘计算 (仅基于真正的裂缝)
         gt_uint8 = np.where(gt_np == 255, 255, 0).astype(np.uint8) 
         edge = cv2.Canny(gt_uint8, 100, 200)
         kernel = np.ones((5, 5), np.uint8)
@@ -57,7 +56,6 @@ class ImageFolder(data.Dataset):
         edge = cv2.resize(edge, self.trainsize_tuple, interpolation=cv2.INTER_NEAREST)
         edge_tensor = torch.from_numpy(edge).unsqueeze(0).float() / 255.0
 
-        # 5. 原图处理
         image = Image.fromarray(image)
         image = self.img_transform(image)
 
