@@ -484,6 +484,3 @@ if __name__ == '__main__':
         # print(i, '->', running_frame_rate)
         frame_rate[i] = running_frame_rate
     print(np.mean(frame_rate))
-
-
-
