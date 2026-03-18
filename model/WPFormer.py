@@ -165,7 +165,6 @@ class SegHead(nn.Module):
         self.decoder_norm = nn.LayerNorm(channel)
         self.class_embed = nn.Linear(channel, 1)
         self.mask_embed = MLP(channel, channel, channel, 3)
-        # self.num_heads = 8
 
     def forward(self, output, mask_features,attn_mask_target_size):
 
@@ -179,8 +178,6 @@ class SegHead(nn.Module):
         attn_mask = None
 
         return outputs_class, outputs_mask, attn_mask
-
-
 
 
 class DSConv3x3(nn.Module):
@@ -197,15 +194,12 @@ class DSConv3x3(nn.Module):
 
 class MultiheadAttention(nn.Module):
     def __init__(self, d_model, h, dropout=0.0):
-        "Take in model size and number of heads."
         super(MultiheadAttention, self).__init__()
         assert d_model % h == 0
-        # We assume d_v always equals d_k
         self.d_k = d_model // h
         self.h = h
 
         self.norm1 = nn.LayerNorm(d_model)
-
 
         self.pool = wavelet.WavePool(d_model)
         self.self_attn1 = nn.MultiheadAttention(d_model, h, dropout=dropout, batch_first=True)
@@ -216,8 +210,6 @@ class MultiheadAttention(nn.Module):
         self.Mheads = nn.Linear(d_model, self.proto_size, bias=False)
         self.mscw2 = MSCW(d_model=d_model)
         self.norm2 = nn.LayerNorm(d_model)
-
-
 
     def forward(self, query, key, value, attn_mask=None):
 
@@ -255,8 +247,66 @@ class MultiheadAttention(nn.Module):
 
         x = x1+x2
 
-
         return x.transpose(0, 1)
+
+
+# ================= 新增: ASER_Lite 模块 =================
+class ASER_Lite(nn.Module):
+    def __init__(self, in_channels):
+        super(ASER_Lite, self).__init__()
+        
+        # 1. 边缘预测分支 (Edge Head)
+        self.edge_head = nn.Sequential(
+            nn.Conv2d(in_channels, in_channels // 2, 3, padding=1),
+            nn.BatchNorm2d(in_channels // 2),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(in_channels // 2, 1, 1)
+        )
+        
+        # 2. 歧义预测分支 (Ambiguity Head)
+        self.ambiguity_head = nn.Sequential(
+            nn.Conv2d(in_channels, in_channels // 2, 3, padding=1),
+            nn.BatchNorm2d(in_channels // 2),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(in_channels // 2, 1, 1)
+        )
+        
+        # 3. 门控卷积细化 (Gated Refinement)
+        self.gate_conv = nn.Sequential(
+            nn.Conv2d(in_channels + 3, in_channels // 2, 3, padding=1),
+            nn.BatchNorm2d(in_channels // 2),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(in_channels // 2, in_channels, 1),
+            nn.Sigmoid() 
+        )
+        
+        # 4. 残差修补
+        self.refine_conv = nn.Sequential(
+            nn.Conv2d(in_channels, in_channels // 2, 3, padding=1),
+            nn.BatchNorm2d(in_channels // 2),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(in_channels // 2, 1, 1)
+        )
+
+    def forward(self, mask_features, coarse_mask):
+        edge_logits = self.edge_head(mask_features)
+        ambiguity_logits = self.ambiguity_head(mask_features)
+        
+        E_prob = torch.sigmoid(edge_logits)
+        A_prob = torch.sigmoid(ambiguity_logits)
+        M_prob = torch.sigmoid(coarse_mask)
+        
+        # 1.0 - A_prob 表示压制歧义噪点
+        concat_feat = torch.cat([mask_features, E_prob, 1.0 - A_prob, M_prob], dim=1)
+        
+        G = self.gate_conv(concat_feat)
+        refined_feat = mask_features * G
+        
+        delta = self.refine_conv(refined_feat)
+        refined_mask = coarse_mask + delta
+        
+        return refined_mask, edge_logits, ambiguity_logits
+# ========================================================
 
 
 class WPFormer(nn.Module):
@@ -327,7 +377,6 @@ class WPFormer(nn.Module):
                 )
             )
 
-
         self.level_embed = nn.Embedding(self.num_feature_levels, channel)
         self.input_proj = nn.ModuleList()
         for _ in range(self.num_feature_levels):
@@ -348,12 +397,14 @@ class WPFormer(nn.Module):
         self.SegHeads = nn.ModuleList()
         for _ in range(self.num_feature_levels+1):
             self.SegHeads.append(SegHead(channel))
-
+            
+        # ---- 新增 ASER-lite ----
+        self.aser = ASER_Lite(channel)
 
     def upsample_add(self, x, y):
         bs, _, H, W = y.size()
         return F.upsample(x, size=(H, W), mode='bilinear') + y
-    #
+
     def forward_prediction_heads(self, output, mask_features):
         bs = output.size()[1]
         decoder_output = self.decoder_norm(output)
@@ -366,7 +417,7 @@ class WPFormer(nn.Module):
 
         return outputs_class, outputs_mask, attn_mask
 
-    def forward(self, x):
+    def forward(self, x, return_aux=False):
         image_shape = x.size()[2:]
         bs = x.size()[0]
         pvt = self.backbone(x)
@@ -391,11 +442,9 @@ class WPFormer(nn.Module):
         pos = []
         size_list = []
         for i in range(self.num_feature_levels):
-            # print(x[i].size())
             size_list.append(x[i].shape[-2:])
             pos.append(self.pe_layer(x[i], None).flatten(2))
             src.append(self.input_proj[i](x[i]).flatten(2) + self.level_embed.weight[i][None, :, None])
-            # flatten NxCxHxW to HWxNxC
             pos[-1] = pos[-1].permute(2, 0, 1)
             src[-1] = src[-1].permute(2, 0, 1)
 
@@ -417,12 +466,10 @@ class WPFormer(nn.Module):
         for i in range(self.num_feature_levels):
             level_index = i % self.num_feature_levels
 
-            # attn_mask[torch.where(attn_mask.sum(-1) == attn_mask.shape[-1])] = False
-
             output = self.transformer_cross_attention_layers[i](
                 output, src[level_index],
                 memory_mask=None,
-                memory_key_padding_mask=None,  # here we do not apply masking on padded region
+                memory_key_padding_mask=None,
                 pos=pos[level_index], query_pos=query_embed
             )
             output = self.transformer_self_attention_layers[i](
@@ -430,57 +477,34 @@ class WPFormer(nn.Module):
                 tgt_key_padding_mask=None,
                 query_pos=query_embed
             )
-            # fres_feat.append(fre)
 
             outputs_class, outputs_mask, attn_mask = self.SegHeads[i+1](output, mask_features,attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
             predictions_mask.append(self.semantic_inference(outputs_class, outputs_mask))
 
+        # --- 原有的 Coarse Mask 融合 ---
+        coarse_mask = predictions_mask[1] + predictions_mask[2] + predictions_mask[3]
+        predictions_mask.append(coarse_mask)
 
+        # --- 接入 ASER-lite 模块 ---
+        refined_mask, edge_logits, ambiguity_logits = self.aser(mask_features, coarse_mask)
+        
+        # 核心安全操作：把 refined_mask 放在 predictions_mask 的最后一位
+        predictions_mask.append(refined_mask)
 
-        mask = predictions_mask[1]+predictions_mask[2]+ predictions_mask[3]
+        # 统一上采样主输出 (增加 align_corners=False)
+        for i in range(len(predictions_mask)):
+            predictions_mask[i] = F.interpolate(predictions_mask[i], size=image_shape, mode='bilinear', align_corners=False)
 
-        predictions_mask.append(mask)
-
-        for i in range(self.num_feature_levels + 2):
-            predictions_mask[i] = F.interpolate(predictions_mask[i], size=image_shape, mode='bilinear')
-
-        return predictions_mask
+        # --- 根据模式返回 ---
+        if return_aux:
+            edge_logits = F.interpolate(edge_logits, size=image_shape, mode='bilinear', align_corners=False)
+            ambiguity_logits = F.interpolate(ambiguity_logits, size=image_shape, mode='bilinear', align_corners=False)
+            # 训练时返回三项
+            return predictions_mask, edge_logits, ambiguity_logits
+        else:
+            # 推理时只返回分割列表，兼容 preds[-1] 取值
+            return predictions_mask
 
     def semantic_inference(self, mask_cls, mask_pred):
-
         semseg = torch.einsum("bqc,bqhw->bchw", mask_cls, mask_pred)
         return semseg
-
-
-
-
-import time
-import numpy as np
-if __name__ == '__main__':
-    #images = torch.rand(2, 3, 224, 224)
-    # images = torch.rand(1, 3, 320, 320).cuda(0)
-    model = WPQENet()
-    # model.load_state_dict(torch.load("D:\yanfeng\project\\model.pth"))
-    from mmcv.cnn import get_model_complexity_info
-
-    if torch.cuda.is_available():
-        net = model.cuda()
-    net.eval()
-    flops, params = get_model_complexity_info(net, input_shape=(3, 384, 384))
-    print(flops)
-    print(params)
-
-    bc = 1
-    dump_x = torch.randn(bc, 3, 384, 384).cuda()
-
-    frame_rate = np.zeros((1000, 1))
-    for i in range(1000):
-        with torch.no_grad():
-            start_time = time.time()
-            res = net(dump_x)
-            end_time = time.time()
-
-        running_frame_rate = (1 * float((bc / (end_time - start_time))))
-        # print(i, '->', running_frame_rate)
-        frame_rate[i] = running_frame_rate
-    print(np.mean(frame_rate))
