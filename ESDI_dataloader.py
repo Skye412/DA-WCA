@@ -33,17 +33,15 @@ class ImageFolder(data.Dataset):
         image = np.asarray(Image.open(self.images[index]).convert('RGB'))
         gt = np.asarray(Image.open(self.gts[index]).convert('L'))
 
-        if self.training:
-            # ==================== 【70/30 采样策略核心实现】 ====================
             if self.training:
             # ==================== 【切回 100% Patch 采样】 ====================
-            cropper = albu.CropNonEmptyMaskIfExists(height=self.trainsize, width=self.trainsize, p=1.0)
-            aug = cropper(image=image, mask=gt)
-            image_patch, gt_patch = aug['image'], aug['mask']
+                cropper = albu.CropNonEmptyMaskIfExists(height=self.trainsize, width=self.trainsize, p=1.0)
+                aug = cropper(image=image, mask=gt)
+                image_patch, gt_patch = aug['image'], aug['mask']
             
-            # 执行基础增强
-            final_aug = self.base_aug(image=image_patch, mask=gt_patch)
-            image, gt_aug = final_aug['image'], final_aug['mask']
+                # 执行基础增强
+                final_aug = self.base_aug(image=image_patch, mask=gt_patch)
+                image, gt_aug = final_aug['image'], final_aug['mask']
         else:
             # 验证/测试集：为了指标稳定性，使用中心裁剪
             aug = albu.CenterCrop(height=self.trainsize, width=self.trainsize, p=1.0)(image=image, mask=gt)
