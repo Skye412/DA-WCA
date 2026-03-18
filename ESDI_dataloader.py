@@ -35,13 +35,9 @@ class ImageFolder(data.Dataset):
 
         if self.training:
             # ==================== 【70/30 采样策略核心实现】 ====================
-            if random.random() < 0.7:
-                # 70% 概率：强制寻找包含裂缝像素的块
-                cropper = albu.CropNonEmptyMaskIfExists(height=self.trainsize, width=self.trainsize, p=1.0)
-            else:
-                # 30% 概率：纯随机裁剪（大概率包含纯背景块，作为负样本）
-                cropper = albu.RandomCrop(height=self.trainsize, width=self.trainsize, p=1.0)
-            
+            if self.training:
+            # ==================== 【切回 100% Patch 采样】 ====================
+            cropper = albu.CropNonEmptyMaskIfExists(height=self.trainsize, width=self.trainsize, p=1.0)
             aug = cropper(image=image, mask=gt)
             image_patch, gt_patch = aug['image'], aug['mask']
             

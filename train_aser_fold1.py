@@ -29,7 +29,7 @@ from ESDI_dataloader import get_loader
 # ================= 1. 配置区 =================
 FOLD = 1
 # 使用绝对路径存放在你要求的 save 目录下
-BASE_DIR = "/home/skye/data/Skye/DA-WCA/save/stage3_patch_aser_fold1"
+BASE_DIR = "/home/skye/data/Skye/DA-WCA/save/stage3_patch_aser_100_fold1"
 S2DS_DIR = "/home/skye/data/Skye/databases/s2ds5"
 PRETRAINED_WEIGHTS = "/home/skye/data/Skye/DA-WCA/save/stage2_512/checkpoints/WPFormer_synth_512_best.pth"
 
