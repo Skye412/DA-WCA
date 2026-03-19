@@ -1,13 +1,13 @@
 """
 =============================================================================
-Experiment: ASER-lite (Ambiguity-Suppressed Edge Refinement) Phase 1
-Objective: 验证在 100% Patch 采样基线下，加入局部边缘细化与歧义抑制模块，
-           能否突破当前 Fold 1 的最高 F1 (0.6491)，解决断连与局部背景误检。
+Experiment: Final 5-Fold ASER-lite with 70/30 Patch Sampling
+Objective: 跑满 5 折，验证 70/30 采样（全局抗噪）与 ASER-lite（局部边缘细化）
+           的完美协同效应，确立最终 SOTA 性能。
 Strategy: 
   - Backbone: WPFormer (PVTv2)
-  - Sampling: 100% Patch (ESDI_dataloader.py with p=1.0)
+  - Sampling: 70/30 Patch (在 ESDI_dataloader.py 中 p=0.7)
   - Loss: Seg Loss (Aux 0.5 + Refined 1.0) + Edge Loss (0.1) + Ambiguity Loss (0.1)
-  - Data: Fold 1 Only
+  - Data: Fold 1 to Fold 5
 =============================================================================
 """
 
@@ -27,9 +27,8 @@ from model.WPFormer import WPFormer
 from ESDI_dataloader import get_loader
 
 # ================= 1. 配置区 =================
-FOLD = 1
 # 使用绝对路径存放在你要求的 save 目录下
-BASE_DIR = "/home/skye/data/Skye/DA-WCA/save/stage3_patch_aser_100_v2_fold1"
+BASE_DIR = "/home/skye/data/Skye/DA-WCA/save/stage3_patch_aser_7030_5fold"
 S2DS_DIR = "/home/skye/data/Skye/databases/s2ds5"
 PRETRAINED_WEIGHTS = "/home/skye/data/Skye/DA-WCA/save/stage2_512/checkpoints/WPFormer_synth_512_best.pth"
 
@@ -63,7 +62,6 @@ eval_logger = get_logger("eval", os.path.join(LOG_DIR, "eval.log"))
 
 # ================= 3. 核心机制 =================
 def calculate_metrics(pred, gt_img):
-    # 只计算非 ignore (0 和 255) 区域
     valid_mask = (gt_img == 0) | (gt_img == 255)
     pred_valid = pred[valid_mask]
     gt_valid = gt_img[valid_mask]
@@ -115,15 +113,14 @@ def sliding_window_inference(model, image_tensor, window_size=512, stride=256):
         for x in x_steps:
             patch = image_tensor[:, :, y:y+window_size, x:x+window_size]
             with torch.no_grad():
-                # 推理时 return_aux 默认为 False，preds 是一个 list
                 preds = model(patch) 
-                pred_patch = torch.sigmoid(preds[-1]) # 取最终的 refined_mask
+                pred_patch = torch.sigmoid(preds[-1]) 
             full_mask[:, :, y:y+window_size, x:x+window_size] += pred_patch
             count_map[:, :, y:y+window_size, x:x+window_size] += 1.0
 
     return (full_mask[:, :, :h, :w] / (count_map[:, :, :h, :w] + 1e-8))
 
-def eval_sliding_window(val_list_path, image_root, gt_root, model, epoch, save_visuals=False):
+def eval_sliding_window(val_list_path, image_root, gt_root, model, fold, epoch, save_visuals=False):
     model.eval()
     img_transform = transforms.Compose([
         transforms.ToTensor(),
@@ -134,7 +131,7 @@ def eval_sliding_window(val_list_path, image_root, gt_root, model, epoch, save_v
         filenames = [line.strip() for line in f.readlines() if line.strip()]
     
     results = []
-    for filename in tqdm(filenames, desc=f"Eval Ep {epoch}", leave=False):
+    for filename in tqdm(filenames, desc=f"Eval Fold {fold} Ep {epoch}", leave=False):
         img_path = os.path.join(image_root, filename)
         gt_path = os.path.join(gt_root, filename)
         
@@ -142,20 +139,23 @@ def eval_sliding_window(val_list_path, image_root, gt_root, model, epoch, save_v
         gt = cv2.imread(gt_path, cv2.IMREAD_GRAYSCALE)
         
         pred = sliding_window_inference(model, image).cpu().numpy().squeeze()
-        pred_bw = (pred >= 0.5).astype(np.uint8) * 255
+        pred_bw = (pred >= 0.4).astype(np.uint8) * 255
         
         iou, f1, prec, rec = calculate_metrics(pred_bw, gt)
         results.append([iou, f1, prec, rec])
 
-        # 保存图片：预测 BW图 和 3合1 对比图 (Orig | GT | Pred)
         if save_visuals:
-            cv2.imwrite(os.path.join(PRED_DIR, filename), pred_bw)
+            fold_pred_dir = os.path.join(PRED_DIR, f"fold{fold}")
+            fold_comp_dir = os.path.join(COMP_DIR, f"fold{fold}")
+            os.makedirs(fold_pred_dir, exist_ok=True)
+            os.makedirs(fold_comp_dir, exist_ok=True)
+
+            cv2.imwrite(os.path.join(fold_pred_dir, filename), pred_bw)
             
             orig_img = cv2.imread(img_path)
             gt_color = cv2.cvtColor(np.where(gt==255, 255, 0).astype(np.uint8), cv2.COLOR_GRAY2BGR)
             pred_color = cv2.cvtColor(pred_bw, cv2.COLOR_GRAY2BGR)
             
-            # 为三合一图添加文字标签
             def add_label(img, text):
                 overlay = img.copy()
                 cv2.rectangle(overlay, (0, 0), (280, 40), (0, 0, 0), -1)
@@ -167,33 +167,32 @@ def eval_sliding_window(val_list_path, image_root, gt_root, model, epoch, save_v
             gt_color = add_label(gt_color, "Ground Truth")
             pred_color = add_label(pred_color, "ASER Pred")
 
-            # 三合一图水平拼接
             comp = np.hstack((orig_img, gt_color, pred_color))
-            cv2.imwrite(os.path.join(COMP_DIR, filename), comp)
+            cv2.imwrite(os.path.join(fold_comp_dir, filename), comp)
 
     return np.mean(results, axis=0)
 
 # ================= 4. 训练流程 =================
-def train():
+def train_one_fold(fold):
     epoch_num = 40  
     epoch_val = 2   
     train_size = 512 
-    batch_size = 4 
+    batch_size = 4  
     
-    train_list_path = os.path.join(S2DS_DIR, f"fold{FOLD}_train.txt")
-    val_list_path = os.path.join(S2DS_DIR, f"fold{FOLD}_val.txt")
+    train_list_path = os.path.join(S2DS_DIR, f"fold{fold}_train.txt")
+    val_list_path = os.path.join(S2DS_DIR, f"fold{fold}_val.txt")
     img_root = os.path.join(S2DS_DIR, "images", "")
     gt_root = os.path.join(S2DS_DIR, "labs", "")
     
-    train_logger.info(f"{'='*20} 启动 ASER-lite Fold {FOLD} 训练 {'='*20}")
+    train_logger.info(f"\n{'='*20} 启动 ASER Fold {fold} 训练 {'='*20}")
     
-    # 确保此处的 dataloader 是 100% Patch 采样版本
+    # 获取 Dataloader (请确保 ESDI_dataloader.py 已改回 70/30 的逻辑)
     train_loader = get_loader(train_list_path, img_root, gt_root, batchsize=batch_size, trainsize=train_size, is_train=True)
     
     net = WPFormer(method="pvt_v2_b2", channel=64).cuda()
     if os.path.exists(PRETRAINED_WEIGHTS):
         net.load_state_dict(torch.load(PRETRAINED_WEIGHTS), strict=False)
-        train_logger.info(f"✅ 成功加载 Stage 2 合成域预训练权重")
+        train_logger.info(f"✅ Fold {fold}: 成功加载合成域权重")
 
     optimizer = optim.Adam(net.parameters(), lr=1e-4)
     lr_scheduler = CosineAnnealingLR(optimizer, T_max=epoch_num, eta_min=1e-7)
@@ -205,7 +204,7 @@ def train():
         net.train()
         run_loss_seg, run_loss_edge, run_loss_amb, run_loss_tot = 0.0, 0.0, 0.0, 0.0
         
-        pbar = tqdm(train_loader, desc=f"Ep {epoch}", leave=False)
+        pbar = tqdm(train_loader, desc=f"Fold {fold} Ep {epoch}", leave=False)
         for data in pbar:
             images = data['image'].cuda()
             gts = data['label'].cuda()
@@ -213,13 +212,13 @@ def train():
             
             optimizer.zero_grad()
             
-            # 开启 return_aux 获取辅助信息
+            # 开启 return_aux
             preds, edge_logits, ambiguity_logits = net(images, return_aux=True)
             
-            # 1. 主分割 Loss 分离权重
+            # 1. 主分割 Loss (回退到 ASER 的最强配置)
             loss_aux = sum(total_loss(p, gts) for p in preds[:-1]) / len(preds[:-1])
             loss_refined = total_loss(preds[-1], gts)
-            loss_seg = 0.3 * loss_aux + 1.0 * loss_refined
+            loss_seg = 0.5 * loss_aux + 1.0 * loss_refined
             
             # 2. 准备 Mask 与动态 GT
             valid_mask = (gts != 255).float()
@@ -229,53 +228,62 @@ def train():
             edge_bce = F.binary_cross_entropy_with_logits(edge_logits, edges, reduction='none')
             loss_edge = (edge_bce * valid_mask).sum() / (valid_mask.sum() + 1e-8)
             
-            # 4. Ambiguity Loss (生成膨胀歧义环)
+            # 4. Ambiguity Loss
             dilated = F.max_pool2d(clean_gt, kernel_size=5, stride=1, padding=2)
             ambiguity_gt = (dilated - clean_gt).clamp(0, 1) * valid_mask
             
             amb_bce = F.binary_cross_entropy_with_logits(ambiguity_logits, ambiguity_gt, reduction='none')
             loss_amb = (amb_bce * valid_mask).sum() / (valid_mask.sum() + 1e-8)
             
-            # 5. 总 Loss (辅助权重保守设为 0.1)
-            loss = loss_seg + 0.05 * loss_edge + 0.05 * loss_amb
+            # 5. 总 Loss (回退到 ASER 0.1 权重配置)
+            loss = loss_seg + 0.1 * loss_edge + 0.1 * loss_amb
             
             loss.backward()
             optimizer.step()
             
-            # 记录数据
             run_loss_seg += loss_seg.item()
             run_loss_edge += loss_edge.item()
             run_loss_amb += loss_amb.item()
             run_loss_tot += loss.item()
             
-            pbar.set_postfix({'L_Tot': f"{loss.item():.3f}", 'L_Seg': f"{loss_seg.item():.3f}"})
+            pbar.set_postfix({'L_Tot': f"{loss.item():.3f}"})
 
         lr_scheduler.step()
         
-        # 记录训练 Loss 到 train.log
         num_batches = len(train_loader)
-        train_logger.info(f"Ep {epoch:02d} | L_Tot: {run_loss_tot/num_batches:.4f} | L_Seg: {run_loss_seg/num_batches:.4f} | L_Edg: {run_loss_edge/num_batches:.4f} | L_Amb: {run_loss_amb/num_batches:.4f}")
+        train_logger.info(f"Fold {fold} | Ep {epoch:02d} | L_Tot: {run_loss_tot/num_batches:.4f} | L_Seg: {run_loss_seg/num_batches:.4f} | L_Edg: {run_loss_edge/num_batches:.4f} | L_Amb: {run_loss_amb/num_batches:.4f}")
         
-        # 定期评估
         if (epoch+1) >= epoch_val:
-            avg_metrics = eval_sliding_window(val_list_path, img_root, gt_root, net, epoch, save_visuals=False)
+            avg_metrics = eval_sliding_window(val_list_path, img_root, gt_root, net, fold, epoch, save_visuals=False)
             iou, f1, prec, rec = avg_metrics[0], avg_metrics[1], avg_metrics[2], avg_metrics[3]
             
-            eval_msg = f"Epoch {epoch:02d} | IoU: {iou:.4f} | F1: {f1:.4f} | Pre: {prec:.4f} | Rec: {rec:.4f}"
+            eval_msg = f"Fold {fold} | Epoch {epoch:02d} | IoU: {iou:.4f} | F1: {f1:.4f} | Pre: {prec:.4f} | Rec: {rec:.4f}"
             if f1 > best_f1:
                 best_f1 = f1
-                best_ckpt = os.path.join(CKPT_DIR, "WPFormer_aser_fold1_best.pth")
+                best_ckpt = os.path.join(CKPT_DIR, f"WPFormer_aser_fold{fold}_best.pth")
                 torch.save(net.state_dict(), best_ckpt)
                 eval_msg += " [★ F1 最优]"
             eval_logger.info(eval_msg)
 
-    # 训练结束，使用最佳权重生成测试图
-    train_logger.info(f"🏆 Fold 1 训练结束，最佳 F1: {best_f1:.4f}")
-    eval_logger.info(f"🏆 开始生成最终预测图和三合一图 (基于最佳权重)...")
+    # Fold 结束
+    train_logger.info(f"🏆 Fold {fold} 训练结束，最佳 F1: {best_f1:.4f}")
+    eval_logger.info(f"🏆 Fold {fold} 开始生成最终预测图 (基于最佳权重)...")
     
     net.load_state_dict(torch.load(best_ckpt))
-    eval_sliding_window(val_list_path, img_root, gt_root, net, "Final", save_visuals=True)
-    eval_logger.info(f"✅ 生成完毕，结果保存在: \n - 预测图: {PRED_DIR} \n - 三合一: {COMP_DIR}")
+    eval_sliding_window(val_list_path, img_root, gt_root, net, fold, "Final", save_visuals=True)
+    
+    return best_f1
 
 if __name__ == '__main__':
-    train()
+    all_best_f1 = []
+    
+    for fold in range(1, 6):
+        best_f1 = train_one_fold(fold)
+        all_best_f1.append(best_f1)
+        
+    avg_f1 = np.mean(all_best_f1)
+    
+    summary_msg = f"\n{'='*50}\n🎯 5-Fold ASER 汇总结果:\n各折最佳 F1: {all_best_f1}\n平均 F1: {avg_f1:.4f}\n{'='*50}"
+    train_logger.info(summary_msg)
+    eval_logger.info(summary_msg)
+    print(summary_msg)
