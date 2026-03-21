@@ -24,6 +24,7 @@ output/
 outputs/
 save/
 save_model/
+unified_predictions/
 
 # model files
 *.pth
