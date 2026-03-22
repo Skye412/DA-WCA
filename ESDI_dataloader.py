@@ -8,7 +8,6 @@ from PIL import Image
 from torch.utils import data
 import torchvision.transforms as transforms
 import albumentations as albu
-from skimage.morphology import skeletonize  # <--- 新增依赖
 
 class ImageFolder(data.Dataset):
     def __init__(self, list_path, image_root, gt_root, trainsize=512, is_train=False):
@@ -34,67 +33,51 @@ class ImageFolder(data.Dataset):
         image = np.asarray(Image.open(self.images[index]).convert('RGB'))
         gt = np.asarray(Image.open(self.gts[index]).convert('L'))
 
+        # 1. 裁剪与数据增强
         if self.training:
-            # ==================== 【70/30 混合采样策略】 ====================
             if random.random() < 0.7:
-                # 70% 概率：强制采样包含裂缝的正样本区域
                 cropper = albu.CropNonEmptyMaskIfExists(height=self.trainsize, width=self.trainsize, p=1.0)
             else:
-                # 30% 概率：随机采样，提供纯背景负样本供 ASER 学习抗噪
                 cropper = albu.RandomCrop(height=self.trainsize, width=self.trainsize, p=1.0)
                 
             aug = cropper(image=image, mask=gt)
             image_patch, gt_patch = aug['image'], aug['mask']
             
-            # 执行基础增强
             final_aug = self.base_aug(image=image_patch, mask=gt_patch)
             image, gt_aug = final_aug['image'], final_aug['mask']
         else:
-            # 验证/测试集：为了指标稳定性，使用中心裁剪
             aug = albu.CenterCrop(height=self.trainsize, width=self.trainsize, p=1.0)(image=image, mask=gt)
             image, gt_aug = aug['image'], aug['mask']
 
-        # ==================== 【标签映射与容错机制】 ====================
+        # 2. 标签映射与容错环机制
         gt_np = np.asarray(gt_aug, dtype=np.float32)
         gt_bin = np.where(gt_np == 255, 255, 0).astype(np.uint8)
 
         if self.training:
             kernel = np.ones((3, 3), np.uint8)
-            # 1. 闭运算修复小断裂
             gt_closed = cv2.morphologyEx(gt_bin, cv2.MORPH_CLOSE, kernel, iterations=1)
-            # 2. 膨胀 1 像素作为容错 Ignore 环
             gt_dilated = cv2.dilate(gt_closed, kernel, iterations=1)
 
             target = np.zeros_like(gt_bin, dtype=np.float32)
             target[gt_closed == 255] = 1.0
-            # 设置 Ignore 区域 (255.0)
             target[(gt_dilated == 255) & (gt_closed == 0)] = 255.0 
-            
             edge_source = gt_closed
         else:
-            # 验证集保持原生严格指标
             target = np.zeros_like(gt_bin, dtype=np.float32)
             target[gt_bin == 255] = 1.0
             target[(gt_np > 0) & (gt_np < 255)] = 255.0 
-            
             edge_source = gt_bin
 
-        # ==================== 【辅助张量生成】 ====================
-        # 1. 边缘提取
+        # 3. 边缘特征提取
         edge = cv2.Canny(edge_source, 100, 200)
         edge = cv2.dilate(edge, np.ones((5, 5), np.uint8), iterations=1)
         edge_tensor = torch.from_numpy(edge).unsqueeze(0).float() / 255.0
 
-        # 2. 中心线 (骨架) 提取
-        # 注意：只对修复后的明确裂缝 (255) 进行骨架化，防止被 Ignore 区污染
-        gt_skel = skeletonize(edge_source == 255).astype(np.float32)
-        centerline_tensor = torch.from_numpy(gt_skel).unsqueeze(0)
-
+        # 返回纯净的字典 (只有 image, label, edge)
         return {
             'image': self.img_transform(Image.fromarray(image)), 
             'label': torch.from_numpy(target).unsqueeze(0), 
-            "edge": edge_tensor,
-            "centerline": centerline_tensor  # <--- 打包中心线输出
+            "edge": edge_tensor
         }
 
     def __len__(self):

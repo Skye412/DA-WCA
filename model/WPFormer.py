@@ -249,12 +249,12 @@ class MultiheadAttention(nn.Module):
         return x.transpose(0, 1)
 
 
-# ================= 新增: ASER_Lite 模块 (含 Centerline Head) =================
+# ================= 经典 ASER_Lite 模块 =================
 class ASER_Lite(nn.Module):
     def __init__(self, in_channels):
         super(ASER_Lite, self).__init__()
         
-        # 1. 边缘预测分支 (Edge Head)
+        # 1. 边缘预测分支
         self.edge_head = nn.Sequential(
             nn.Conv2d(in_channels, in_channels // 2, 3, padding=1),
             nn.BatchNorm2d(in_channels // 2),
@@ -262,23 +262,15 @@ class ASER_Lite(nn.Module):
             nn.Conv2d(in_channels // 2, 1, 1)
         )
         
-        # 2. 歧义预测分支 (Ambiguity Head)
+        # 2. 歧义预测分支
         self.ambiguity_head = nn.Sequential(
             nn.Conv2d(in_channels, in_channels // 2, 3, padding=1),
             nn.BatchNorm2d(in_channels // 2),
             nn.ReLU(inplace=True),
             nn.Conv2d(in_channels // 2, 1, 1)
         )
-
-        # ================= 【新增】3. 中心线骨架分支 (Centerline Head) =================
-        self.centerline_head = nn.Sequential(
-            nn.Conv2d(in_channels, in_channels // 2, 3, padding=1),
-            nn.BatchNorm2d(in_channels // 2),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(in_channels // 2, 1, 1)
-        )
         
-        # 4. 门控卷积细化 (Gated Refinement)
+        # 3. 门控卷积细化
         self.gate_conv = nn.Sequential(
             nn.Conv2d(in_channels + 3, in_channels // 2, 3, padding=1),
             nn.BatchNorm2d(in_channels // 2),
@@ -287,7 +279,7 @@ class ASER_Lite(nn.Module):
             nn.Sigmoid() 
         )
         
-        # 5. 残差修补
+        # 4. 残差修补
         self.refine_conv = nn.Sequential(
             nn.Conv2d(in_channels, in_channels // 2, 3, padding=1),
             nn.BatchNorm2d(in_channels // 2),
@@ -298,9 +290,6 @@ class ASER_Lite(nn.Module):
     def forward(self, mask_features, coarse_mask):
         edge_logits = self.edge_head(mask_features)
         ambiguity_logits = self.ambiguity_head(mask_features)
-        
-        # 【新增】输出中心线 Logits
-        centerline_logits = self.centerline_head(mask_features)
         
         E_prob = torch.sigmoid(edge_logits)
         A_prob = torch.sigmoid(ambiguity_logits)
@@ -315,8 +304,8 @@ class ASER_Lite(nn.Module):
         delta = self.refine_conv(refined_feat)
         refined_mask = coarse_mask + delta
         
-        # 返回 4 个参数
-        return refined_mask, edge_logits, ambiguity_logits, centerline_logits
+        # 严格返回 3 个参数
+        return refined_mask, edge_logits, ambiguity_logits
 # ========================================================
 
 
@@ -324,10 +313,10 @@ class WPFormer(nn.Module):
     def __init__(self, method="pvt_v2_b2", channel=64, num_queries=16):
         super(WPFormer, self).__init__()
         if method=="pvt_v2_b2":
-            self.backbone = pvt_v2_b2()  # [64, 128, 320, 512]
+            self.backbone = pvt_v2_b2()  
             path = './model/pvt_v2_b2.pth'
         else:
-            self.backbone = pvt_v2_b4()  # [64, 128, 320, 512]
+            self.backbone = pvt_v2_b4()  
             path = './model/pvt_v2_b4.pth'
             
         save_model = torch.load(path)
@@ -359,7 +348,6 @@ class WPFormer(nn.Module):
 
         self.query_embed = nn.Embedding(num_queries, channel)
 
-        # positional encoding
         N_steps = channel // 2
         self.pe_layer = PositionEmbeddingSine(N_steps, normalize=True)
         self.num_heads = 8
@@ -409,7 +397,6 @@ class WPFormer(nn.Module):
         for _ in range(self.num_feature_levels+1):
             self.SegHeads.append(SegHead(channel))
             
-        # ---- 新增 ASER-lite ----
         self.aser = ASER_Lite(channel)
 
     def upsample_add(self, x, y):
@@ -442,7 +429,7 @@ class WPFormer(nn.Module):
         x2_t = self.Translayer2_1(x2)
         x3_t = self.Translayer3_1(x3)
         x4_t = self.Translayer4_1(x4)
-        # FPN
+        
         d3 = self.outconv3(self.fusion1(x4_t, self.latlayer3(x3_t)))
         d2 = self.outconv2(self.fusion2(d3, self.latlayer2(x2_t)))
         d1 = self.outconv1(self.fusion3(d2, self.latlayer1(x1_t)))
@@ -492,31 +479,23 @@ class WPFormer(nn.Module):
             outputs_class, outputs_mask, attn_mask = self.SegHeads[i+1](output, mask_features,attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
             predictions_mask.append(self.semantic_inference(outputs_class, outputs_mask))
 
-        # --- 原有的 Coarse Mask 融合 ---
         coarse_mask = predictions_mask[1] + predictions_mask[2] + predictions_mask[3]
         predictions_mask.append(coarse_mask)
 
-        # --- 接入 ASER-lite 模块 (多接收一个 centerline_logits) ---
-        refined_mask, edge_logits, ambiguity_logits, centerline_logits = self.aser(mask_features, coarse_mask)
+        # 接入 ASER_Lite
+        refined_mask, edge_logits, ambiguity_logits = self.aser(mask_features, coarse_mask)
         
-        # 核心安全操作：把 refined_mask 放在 predictions_mask 的最后一位
         predictions_mask.append(refined_mask)
 
-        # 统一上采样主输出 (增加 align_corners=False)
         for i in range(len(predictions_mask)):
             predictions_mask[i] = F.interpolate(predictions_mask[i], size=image_shape, mode='bilinear', align_corners=False)
 
-        # --- 根据模式返回 ---
         if return_aux:
             edge_logits = F.interpolate(edge_logits, size=image_shape, mode='bilinear', align_corners=False)
             ambiguity_logits = F.interpolate(ambiguity_logits, size=image_shape, mode='bilinear', align_corners=False)
-            # 【新增】对中心线也进行上采样
-            centerline_logits = F.interpolate(centerline_logits, size=image_shape, mode='bilinear', align_corners=False)
-            
-            # 训练时返回四项
-            return predictions_mask, edge_logits, ambiguity_logits, centerline_logits
+            # 严格返回 3 项
+            return predictions_mask, edge_logits, ambiguity_logits
         else:
-            # 推理时只返回分割列表，兼容 preds[-1] 取值
             return predictions_mask
 
     def semantic_inference(self, mask_cls, mask_pred):
