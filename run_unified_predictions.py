@@ -1,6 +1,8 @@
 """
 =============================================================================
-阶段一：双规制预测图生成器 (Dual-Protocol Prediction Generator) - Fold 1
+阶段一：双规制预测图生成器 (Dual-Protocol Prediction Generator) - 终极版
+=============================================================================
+目标：冻结阈值(0.50)，严谨滑窗，为核心演进模型生成标准的二值化预测图。
 =============================================================================
 """
 
@@ -17,29 +19,33 @@ from model.WPFormer import WPFormer
 
 # ================= 1. 历史功勋簿 (Model Manifest) =================
 MODELS_TO_RUN = [
-    # --- Group A: 历史基线 (原生 Resize 推理) ---
-    {"name": "Stage1_384_NoPatch", "path": "/home/skye/data/Skye/DA-WCA/save/stage1_s2ds/checkpoints/WPFormer_fold1_best.pth", "mode": "resize", "size": 384},
-    {"name": "Stage3_384_NoPatch", "path": "/home/skye/data/Skye/DA-WCA/save/stage3_finetune/checkpoints/WPFormer_finetune_fold1_best.pth", "mode": "resize", "size": 384},
-    {"name": "Stage3_512_NoPatch", "path": "/home/skye/data/Skye/DA-WCA/save/stage3_512/checkpoints/WPFormer_stage3_512_fold1_best.pth", "mode": "resize", "size": 512},
-    
-    # --- Group B: Patch 家族 (原生滑窗推理) ---
-    {"name": "Patch_7030_Baseline", "path": "/home/skye/data/Skye/DA-WCA/save/stage3_patch_7030/checkpoints/WPFormer_patch_7030_fold1_best.pth", "mode": "sliding", "window": 512, "stride": 256},
-    {"name": "ASER_100_v1",         "path": "/home/skye/data/Skye/DA-WCA/save/stage3_patch_aser_100_fold1/checkpoints/WPFormer_aser_fold1_best.pth", "mode": "sliding", "window": 512, "stride": 256},
-    {"name": "ASER_100_v2",         "path": "/home/skye/data/Skye/DA-WCA/save/stage3_patch_aser_100_v2_fold1/checkpoints/WPFormer_aser_fold1_best.pth", "mode": "sliding", "window": 512, "stride": 256},
-    {"name": "ASER_7030_Best",      "path": "/home/skye/data/Skye/DA-WCA/save/stage3_patch_aser_7030_5fold/checkpoints/WPFormer_aser_fold1_best.pth", "mode": "sliding", "window": 512, "stride": 256}
+    {"name": "Stage3_512_NoPatch", 
+     "path": "/home/skye/data/Skye/DA-WCA/save/stage3_512/checkpoints/WPFormer_stage3_512_fold1_best.pth", 
+     "mode": "resize", "size": 512},
+     
+    {"name": "Patch_7030_Baseline", 
+     "path": "/home/skye/data/Skye/DA-WCA/save/stage3_patch_7030/checkpoints/WPFormer_patch_7030_fold1_best.pth", 
+     "mode": "sliding", "window": 512, "stride": 256},
+     
+    {"name": "ASER_7030_Best",      
+     "path": "/home/skye/data/Skye/DA-WCA/save/stage3_patch_aser_7030_5fold/checkpoints/WPFormer_aser_fold1_best.pth", 
+     "mode": "sliding", "window": 512, "stride": 256},
+     
+    # 🌟 新晋究极完全体
+    {"name": "ASER_Centerline_Fold1", 
+     "path": "/home/skye/data/Skye/DA-WCA/save/stage3_patch_aser_centerline_fold1/checkpoints/WPFormer_centerline_fold1_best.pth", 
+     "mode": "sliding", "window": 512, "stride": 256}
 ]
 
 S2DS_DIR = "/home/skye/data/Skye/databases/s2ds5"
 FOLD = 1
-OUTPUT_BASE_DIR = "/home/skye/data/Skye/DA-WCA/unified_predictions"
+OUTPUT_BASE_DIR = "/home/skye/data/Skye/DA-WCA/unified_predictions_final"
 THRESHOLD = 0.50
 
 # ================= 2. 模型输出适配器 =================
 def extract_prediction(preds):
-    if isinstance(preds, tuple):
-        raise ValueError("请确保模型评估时 return_aux=False！")
-    if isinstance(preds, list):
-        return preds[-1]
+    if isinstance(preds, tuple): raise ValueError("评估时必须 return_aux=False！")
+    if isinstance(preds, list): return preds[-1]
     return preds
 
 # ================= 3. 两套推理引擎 =================
@@ -72,6 +78,7 @@ def infer_sliding_window(model, img_pil, window_size, stride):
     else:
         h_pad, w_pad = h, w
 
+    # 极其严谨的滑窗边界保护逻辑
     y_steps = list(range(0, h_pad - window_size + 1, stride))
     if h_pad - window_size not in y_steps: y_steps.append(h_pad - window_size)
     x_steps = list(range(0, w_pad - window_size + 1, stride))
@@ -91,7 +98,7 @@ def infer_sliding_window(model, img_pil, window_size, stride):
 # ================= 4. 主流程 =================
 def run_all_predictions():
     print(f"\n{'='*60}")
-    print(f"🚀 启动双规制预测图生成 (全部对齐到原图物理尺寸, 阈值 0.50)")
+    print(f"🚀 启动终极预测图生成器 (Threshold: {THRESHOLD:.2f})")
     print(f"{'='*60}\n")
     
     val_list_path = os.path.join(S2DS_DIR, f"fold{FOLD}_val.txt")
@@ -108,7 +115,8 @@ def run_all_predictions():
             print(f"⚠️ [跳过] 找不到权重文件: {ckpt_path}")
             continue
             
-        print(f"\n⚡ 处理模型: [{model_name}] | 模式: {cfg['mode']}")
+        print(f"\n⚡ 推理模型: [{model_name}]")
+        
         pred_out_dir = os.path.join(OUTPUT_BASE_DIR, model_name)
         os.makedirs(pred_out_dir, exist_ok=True)
         
@@ -116,7 +124,7 @@ def run_all_predictions():
         model.load_state_dict(torch.load(ckpt_path, map_location='cuda'), strict=False)
         model.eval()
 
-        for filename in tqdm(filenames, desc="推理中"):
+        for filename in tqdm(filenames, desc="推理进度"):
             img_path = os.path.join(image_root, filename)
             img_pil = Image.open(img_path).convert("RGB")
             
@@ -130,7 +138,7 @@ def run_all_predictions():
             pred_bw = (pred_prob >= THRESHOLD).astype(np.uint8) * 255
             cv2.imwrite(os.path.join(pred_out_dir, filename), pred_bw)
             
-    print("\n✅ 所有 7 个模型的预测图已生成完毕！存放于:", OUTPUT_BASE_DIR)
+    print(f"\n✅ 预测图生成完毕！存放于: {OUTPUT_BASE_DIR}")
 
 if __name__ == '__main__':
     run_all_predictions()

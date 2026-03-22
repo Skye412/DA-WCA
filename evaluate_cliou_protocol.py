@@ -1,6 +1,10 @@
 """
 =============================================================================
-阶段二：官方协议适配版评测器 (Adapted OmniCrack30k Evaluator)
+阶段二：官方协议适配版评测器 (Adapted OmniCrack30k Evaluator) - 终极版
+=============================================================================
+说明: 
+1. 提取骨架时严格屏蔽了 0 < val < 255 的模糊/容差区域。
+2. 1:1 还原官方 apply_tolerance_official 与 jaccard_score。
 =============================================================================
 """
 
@@ -14,19 +18,16 @@ from sklearn.metrics import jaccard_score
 
 # ================= 1. 配置区 =================
 S2DS_DIR = "/home/skye/data/Skye/databases/s2ds5"
-PRED_BASE_DIR = "/home/skye/data/Skye/DA-WCA/unified_predictions"
+PRED_BASE_DIR = "/home/skye/data/Skye/DA-WCA/unified_predictions_final"
 FOLD = 1
 TOLERANCE = 4
 
 # 必须与上面的生成器名字严格一致！
 MODELS_TO_EVAL = [
-    "Stage1_384_NoPatch",
-    "Stage3_384_NoPatch",
     "Stage3_512_NoPatch",
     "Patch_7030_Baseline",
-    "ASER_100_v1",
-    "ASER_100_v2",
-    "ASER_7030_Best"
+    "ASER_7030_Best",
+    "ASER_Centerline_Fold1"
 ]
 
 # ================= 2. 核心逻辑 =================
@@ -67,10 +68,10 @@ def run_evaluation():
     with open(val_list_path, 'r') as f:
         filenames = [line.strip() for line in f.readlines() if line.strip()]
 
-    csv_file = "unified_leaderboard_adapted_cliou.csv"
+    csv_file = "unified_leaderboard_adapted_cliou_final.csv"
     with open(csv_file, mode='w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(["Model_Name", "Macro_F1", "Global_F1", "Precision", "Recall", "IoU", "Adapted_clIoU@4px"])
+        writer.writerow(["Model_Name", "Macro_F1", "Global_F1", "Precision", "Recall", "Adapted_clIoU@4px"])
 
         for model_name in MODELS_TO_EVAL:
             pred_dir = os.path.join(PRED_BASE_DIR, model_name)
@@ -78,7 +79,7 @@ def run_evaluation():
                 print(f"⚠️ 找不到预测图目录，跳过: {pred_dir}")
                 continue
                 
-            print(f"\n正在评测: [{model_name}]...")
+            print(f"\n✨ 正在评测: [{model_name}]...")
             macro_results = []
             global_tp, global_fp, global_fn = 0, 0, 0
             trues_cl_all = np.empty((0,), dtype=bool)
@@ -92,7 +93,7 @@ def run_evaluation():
                 gt_img = cv2.imread(gt_path, cv2.IMREAD_GRAYSCALE)
                 pred_img = cv2.imread(pred_path, cv2.IMREAD_GRAYSCALE)
                 
-                # 严谨处理：屏蔽 0 < val < 255 的中间灰度区域
+                # 严谨处理：屏蔽 0 < val < 255 的中间灰度/容差区域
                 valid_mask = ((gt_img == 0) | (gt_img == 255))
                 gt_b = ((gt_img == 255) & valid_mask).astype(np.uint8)
                 pred_b = ((pred_img >= 128) & valid_mask).astype(np.uint8)
@@ -121,15 +122,16 @@ def run_evaluation():
             avg_macro = np.mean(macro_results, axis=0)
             macro_iou, macro_f1, macro_prec, macro_rec = avg_macro
             global_iou, global_f1, global_prec, global_rec = calc_metrics_from_counts(global_tp, global_fp, global_fn)
+            
             cl_iou = jaccard_score(trues_cl_all, preds_cl_all) if len(trues_cl_all) > 0 else 0.0
             
             print(f"✅ {model_name} 结果:")
-            print(f"   [传统像素级] Global F1: {global_f1:.4f} | Prec: {global_prec:.4f} | Rec: {global_rec:.4f}")
-            print(f"   [官方容差级] Adapted clIoU@4px: {cl_iou:.4f}")
+            print(f"   [传统指标] Macro F1: {macro_f1:.4f} | Global F1: {global_f1:.4f} | Pre: {global_prec:.4f} | Rec: {global_rec:.4f}")
+            print(f"   [结构指标] Adapted clIoU@4px: {cl_iou:.4f}")
             
-            writer.writerow([model_name, f"{macro_f1:.4f}", f"{global_f1:.4f}", f"{global_prec:.4f}", f"{global_rec:.4f}", f"{global_iou:.4f}", f"{cl_iou:.4f}"])
+            writer.writerow([model_name, f"{macro_f1:.4f}", f"{global_f1:.4f}", f"{global_prec:.4f}", f"{global_rec:.4f}", f"{cl_iou:.4f}"])
 
-    print(f"\n🎉 评测结束！总表已保存至: {csv_file}")
+    print(f"\n🎉 评测结束！最终总表已保存至: {csv_file}")
 
 if __name__ == '__main__':
     run_evaluation()
