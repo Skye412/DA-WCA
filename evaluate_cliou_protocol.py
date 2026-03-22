@@ -27,7 +27,8 @@ MODELS_TO_EVAL = [
     "Stage3_512_NoPatch",
     "Patch_7030_Baseline",
     "ASER_7030_Best",
-    "ASER_Centerline_Fold1"
+    "ASER_Centerline_Fold1",
+    "ASER_Centerline_Fold1_0.02loss_centerline"
 ]
 
 # ================= 2. 核心逻辑 =================

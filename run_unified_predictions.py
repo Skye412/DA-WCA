@@ -34,6 +34,10 @@ MODELS_TO_RUN = [
     # 🌟 新晋究极完全体
     {"name": "ASER_Centerline_Fold1", 
      "path": "/home/skye/data/Skye/DA-WCA/save/stage3_patch_aser_centerline_fold1/checkpoints/WPFormer_centerline_fold1_best.pth", 
+     "mode": "sliding", "window": 512, "stride": 256},
+
+     {"name": "ASER_Centerline_Fold1_0.02loss_centerline", 
+     "path": "/home/skye/data/Skye/DA-WCA/save/stage3_patch_aser_centerline_fold1_0.02loss_centerline/checkpoints/WPFormer_centerline_fold1_best.pth", 
      "mode": "sliding", "window": 512, "stride": 256}
 ]
 

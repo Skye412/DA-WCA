@@ -1,5 +1,6 @@
 Model_Name,Macro_F1,Global_F1,Precision,Recall,Adapted_clIoU@4px
-Stage3_512_NoPatch,0.6014,0.6473,0.5897,0.7175,0.7575
-Patch_7030_Baseline,0.6437,0.6865,0.6338,0.7487,0.8167
+Stage3_512_NoPatch,0.6009,0.6468,0.5883,0.7182,0.7577
+Patch_7030_Baseline,0.6436,0.6862,0.6326,0.7498,0.8164
 ASER_7030_Best,0.6495,0.6940,0.6418,0.7555,0.8300
 ASER_Centerline_Fold1,0.6434,0.6850,0.5915,0.8136,0.8496
+ASER_Centerline_Fold1_0.02loss_centerline,0.6410,0.6838,0.5848,0.8233,0.8472

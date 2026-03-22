@@ -22,7 +22,7 @@ from model.WPFormer import WPFormer
 from ESDI_dataloader import get_loader
 
 # ================= 1. 配置区 =================
-BASE_DIR = "/home/skye/data/Skye/DA-WCA/save/stage3_patch_aser_centerline_fold1"
+BASE_DIR = "/home/skye/data/Skye/DA-WCA/save/stage3_patch_aser_centerline_fold1_0.02loss_centerline"
 S2DS_DIR = "/home/skye/data/Skye/databases/s2ds5"
 
 # 【已修正】严格使用 Stage2 预训练权重作为底座
@@ -195,7 +195,7 @@ def train_centerline_fold1():
             centerline_bce = F.binary_cross_entropy_with_logits(centerline_logits, centerlines, reduction='none')
             loss_centerline = (centerline_bce * valid_mask).sum() / (valid_mask.sum() + 1e-8)
             
-            loss = loss_seg + 0.1 * loss_edge + 0.1 * loss_amb + 0.05 * loss_centerline
+            loss = loss_seg + 0.1 * loss_edge + 0.1 * loss_amb + 0.02 * loss_centerline
             
             loss.backward()
             optimizer.step()
